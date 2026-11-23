@@ -135,7 +135,9 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 	} catch (e) { keyBytes = null; }
 	const topicS = 'lucky-wheel/' + id + '/s', topicC = 'lucky-wheel/' + id + '/c';
 
+	let revoked = false;
 	function showBad(title, text) {
+		revoked = true;
 		$('mainView').hidden = true; $('badView').hidden = false;
 		$('badTitle').textContent = title; $('badText').textContent = text;
 		$('pill').textContent = 'Hết hiệu lực'; $('pill').className = 'pill';
@@ -203,6 +205,7 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 			if (type === 2) {                         // CONNACK
 				if (p[1] !== 0) { this.ws.close(); return; }
 				this.up = true; this.delay = 1000;
+				last.delete(this); validSince = false; firstBad = 0;   // judge the key again on what the broker holds now
 				this.ws.send(packet(0x82, [0, 1, ...strBytes(topicS), 0]));
 				this.ping = setInterval(() => { if (this.ws && this.ws.readyState === 1) this.ws.send(new Uint8Array([0xC0, 0])); }, 20000);
 				changed();
@@ -224,15 +227,20 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 	// ---- what the brokers say about the wheel ----
 	// per broker: the latest message: {kind: 'state' | 'gone' | 'off', st, at: receive time, live: not a retained copy}
 	const last = new Map();
-	let st = null, stAt = 0, firstBad = 0, everOk = false;
+	let st = null, stAt = 0, firstBad = 0, everOk = false, validSince = false;   // validSince: a good state since the last (re)connect
 	const startAt = Date.now();
 	async function onState(link, text, retained) {
 		const now = Date.now();
+		if (revoked) return;
 		if (text === '0' || text === 'x') { last.set(link, { kind: text === '0' ? 'gone' : 'off', at: now }); changed(); return; }
 		let s;
 		try { s = await openMsg(text, 's|' + id); } catch (e) { if (!firstBad) firstBad = now; changed(); return; }
 		if (!s || s.v !== 1) return;
-		everOk = true;
+		if (s.rev === 1) {   // the board made a new link: sent with our (old) key, so nobody else can fake it
+			showBad('Link này đã hết hiệu lực', 'Người quản lý vòng quay vừa tạo link mới, nên link này không quay được nữa.');
+			return;
+		}
+		everOk = true; validSince = true;
 		last.set(link, { kind: 'state', st: s, at: now, live: !retained });
 		changed();
 	}
@@ -357,6 +365,7 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 	let online = false, lastSeen = 0;
 	function say(msg, err = false) { $('status').textContent = msg; $('status').classList.toggle('err', err); }
 	function changed() {
+		if (revoked) return;
 		const now = Date.now();
 		let best = null, off = false;
 		last.forEach((e) => {
@@ -366,7 +375,7 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 		});
 		const srvUp = links.some((l) => l.up);
 		// the board answers, but with another key; wait a little: the other broker may still hold an old message
-		if (!everOk && firstBad && now - firstBad > 6000) {
+		if (!best && !validSince && firstBad && now - firstBad > 6000) {
 			showBad('Link này đã hết hiệu lực', 'Người quản lý vòng quay đã tạo link mới, nên link cũ không quay được nữa.');
 			return;
 		}
