@@ -137,7 +137,10 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 (() => {
 	'use strict';
 	const $ = (id) => document.getElementById(id);
-	const BROKERS = ['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt'];
+	// Mobile carriers block the brokers' own WebSocket ports (8884, 8084), so the relay on port 443 (relay/worker.js,
+	// a Cloudflare Worker that pipes to the brokers' TCP port 1883) comes first; the direct ports stay as a fallback.
+	const RELAY = '';
+	const BROKERS = (RELAY ? [RELAY + '/hivemq', RELAY + '/emqx'] : []).concat(['wss://broker.hivemq.com:8884/mqtt', 'wss://broker.emqx.io:8084/mqtt']);
 	const FRESH_S = 90;   // a state older than this (the board repeats it every 25 s) means the wheel is gone
 
 	// ---- the link ----
@@ -390,15 +393,16 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 	function kick() { if (!raf) raf = requestAnimationFrame(frame); }
 
 	// ---- state of the page ----
-	let online = false, lastSeen = 0;
+	let online = false, lastSeen = 0, bestLink = null;   // bestLink: the broker the newest state came from
 	function say(msg, err = false) { $('status').textContent = msg; $('status').classList.toggle('err', err); }
 	function changed() {
 		if (revoked) return;
 		const now = Date.now();
 		let best = null, off = false;
-		last.forEach((e) => {
+		bestLink = null;
+		last.forEach((e, l) => {
 			if (e.kind === 'off') off = true;
-			if (e.kind === 'state' && fresh(e, now) && newer(e, best)) best = e;
+			if (e.kind === 'state' && fresh(e, now) && newer(e, best)) { best = e; bestLink = l; }
 			if (e.kind === 'state') lastSeen = Math.max(lastSeen, e.st.t ? e.st.t * 1000 : e.at);
 		});
 		const srvUp = links.some((l) => l.up);
@@ -464,8 +468,9 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 	async function sendNow(p) {
 		p.n = st.n;
 		const msg = await sealMsg({ v: 1, a: p.a, n: p.n, i: p.i }, 'c|' + id);
-		let sent = false;
-		links.forEach((l) => { if (l.publish(topicC, msg)) sent = true; });
+		// the board listens on one broker: send where its newest state came from (one copy), else everywhere
+		let sent = !!bestLink && bestLink.publish(topicC, msg);
+		if (!sent) links.forEach((l) => { if (l.publish(topicC, msg)) sent = true; });
 		if (!sent) { pending = null; say('Chưa nối được máy chủ, thử lại sau giây lát.', true); buttons(); }
 	}
 	function command(a, sending, done) {
