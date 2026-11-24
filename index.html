@@ -103,6 +103,7 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 		<p class="status" id="status" aria-live="polite"></p>
 		<div class="card" id="offCard" hidden>
 			<div class="kv"><span>Máy chủ trung gian</span><b id="kvSrv">–</b></div>
+			<div class="kv"><span>Mạch phát link</span><b id="kvOwner">–</b></div>
 			<div class="kv"><span>Vòng quay ở quán</span><b id="kvWheel">–</b></div>
 			<p class="muted" id="offText"></p>
 		</div>
@@ -154,6 +155,11 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 		if (/^[A-Za-z0-9_-]{12}$/.test(id) && /^[A-Za-z0-9_-]{22}$/.test(k64)) keyBytes = b64dec(k64.replace(/-/g, '+').replace(/_/g, '/') + '==');
 	} catch (e) { keyBytes = null; }
 	const topicS = 'lucky-wheel/' + id + '/s', topicC = 'lucky-wheel/' + id + '/c';
+	// which board serves this link: from its state when it is online, else from the link (new links carry p and g),
+	// else from the last time this phone saw it, so a dead link still says which board to look at
+	let owner = { p: +hp.get('p') || 0, g: hp.has('g') ? +hp.get('g') : null };
+	try { const c = JSON.parse(localStorage.getItem('lw.owner.' + id) || 'null'); if (c && !owner.p && c.p) owner = c; } catch (e) { /* only a hint */ }
+	const ownerText = () => owner.p ? `quả cầu số ${owner.p}` + (owner.g !== null ? ` · nhóm ${owner.g}` : '') : '';
 
 	function setPill(text, cls, dot) {
 		const p = $('pill');
@@ -267,6 +273,10 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 			return;
 		}
 		everOk = true; validSince = true;
+		if (s.p && (s.p !== owner.p || s.g !== owner.g)) {
+			owner = { p: s.p, g: s.g };
+			try { localStorage.setItem('lw.owner.' + id, JSON.stringify(owner)); } catch (e) { /* only a hint */ }
+		}
 		last.set(link, { kind: 'state', st: s, at: now, live: !retained });
 		changed();
 	}
@@ -425,17 +435,19 @@ h2 { margin: 0; font-size: 14px; font-weight: 700; }
 		if (online) setPill('Đã kết nối', 'ok', true);
 		else if (now - startAt > 7000) setPill('Mất kết nối', 'bad', true);
 		else setPill('Đang kết nối…', 'wait', false);
-		$('sub').textContent = st && online ? `${st.N} quả cầu · ${st.o} đang online` : off ? 'Quay từ xa đang tắt'
-			: now - startAt < 7000 ? 'Đang tìm vòng quay…' : `${st ? st.N + ' quả cầu · ' : ''}không thấy vòng quay`;
+		const who = ownerText();
+		$('sub').textContent = st && online ? (who ? `Link của ${who} · ${st.o}/${st.N} online` : `${st.N} quả cầu · ${st.o} đang online`)
+			: off ? 'Quay từ xa đang tắt' : now - startAt < 7000 ? 'Đang tìm vòng quay…' : (who ? `Không thấy ${who}` : 'Không thấy vòng quay');
 		const showOff = !online && now - startAt > 7000;   // first seconds: still connecting
 		$('offCard').hidden = !showOff;
 		if (showOff) {
 			$('kvSrv').textContent = srvUp ? '● Đã nối' : '● Không nối được'; $('kvSrv').className = srvUp ? 'ok' : 'bad';
 			$('kvWheel').textContent = off ? '● Đã tắt quay từ xa' : '● Không thấy'; $('kvWheel').className = 'bad';
+			$('kvOwner').textContent = who ? who.charAt(0).toUpperCase() + who.slice(1) : 'Chưa rõ (link cũ)';
 			const seen = lastSeen ? ` Lần cuối thấy lúc ${new Date(lastSeen).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}.` : '';
 			$('offText').textContent = !srvUp ? 'Điện thoại chưa vào được máy chủ. Kiểm tra mạng của điện thoại.'
 				: off ? 'Người quản lý đã tắt quay từ xa trên mạch. Bật lại trên trang Vòng quay của mạch.'
-				: 'Nhờ người ở quán kiểm tra: mạch có điện không, WiFi có vào được internet không. Trang tự nối lại ngay khi vòng quay online.' + seen;
+				: `Nhờ người ở quán kiểm tra ${who || 'mạch phát link'}: có điện không, WiFi có vào được internet không. Trang tự nối lại ngay khi mạch đó online.` + seen;
 		}
 		buttons();
 		kick();
